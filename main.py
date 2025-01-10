@@ -1,13 +1,19 @@
-import os
-import webbrowser
-import requests
+import speech_recognition as sr
 from gtts import gTTS
 import pygame
-import speech_recognition as sr
-from transformers import pipeline
+import os
+from googletrans import Translator
 from openai import OpenAI
+from transformers import pipeline
 
-# Initialize speech engine
+# Initialize recognizer, translator, and OpenAI API
+recognizer = sr.Recognizer()
+translator = Translator()
+
+# Load BioBERT model for medical term validation
+bio_bert = pipeline("fill-mask", model="dmis-lab/biobert-base-cased-v1.1")
+
+# Function for text-to-speech
 def speak(text):
     tts = gTTS(text)
     tts.save("temp.mp3")
@@ -19,84 +25,82 @@ def speak(text):
     pygame.mixer.music.unload()
     os.remove("temp.mp3")
 
-# Initialize BioBERT pipeline
-bio_bert = pipeline("fill-mask", model="dmis-lab/biobert-base-cased-v1.1")
+# Translate text between languages
+def translate_text(text, src_lang="en", dest_lang="es"):
+    result = translator.translate(text, src=src_lang, dest=dest_lang)
+    return result.text
 
-def validate_medical_terms(text):
-    """Validates medical terms in a given text using BioBERT."""
-    words = text.split()
-    validated_words = []
-
-    for word in words:
-        masked_sentence = f"{word} is a [MASK] term."
-        predictions = bio_bert(masked_sentence)
-
-        if any("medical" in p["token_str"] for p in predictions):
-            validated_words.append(word)
-        else:
-            validated_words.append(word)  # Keep unverified terms for safety
-
-    return " ".join(validated_words)
-
-# Process commands with OpenAI
-client = OpenAI(api_key="<your_openai_api_key>")
-
-def ai_process(command):
+# Use OpenAI for advanced medical conversation processing
+def openai_process(command):
+    client = OpenAI(api_key="<your_openai_api_key>")
     completion = client.chat.completions.create(
-        model="gpt-4o-mini",
-        store=True,
+        model="gpt-4",
         messages=[
-            {"role": "system", "content": "You are a virtual assistant named Jarvis skilled in general tasks like Alexa and Google Cloud. Give short responses please."},
+            {"role": "system", "content": "You are a medical AI skilled in accurate translations and understanding healthcare-related terminology."},
             {"role": "user", "content": command}
         ]
     )
     return completion.choices[0].message.content
 
-def process_command(c):
-    if "open google" in c.lower():
-        webbrowser.open("https://www.google.com")
-    elif "open youtube" in c.lower():
-        webbrowser.open("https://www.youtube.com")
-    elif "open linkedin" in c.lower():
-        webbrowser.open("https://www.linkedin.com")
-    elif "news" in c.lower():
-        api_key = "your_newsapi_key"
-        r = requests.get(f"https://newsapi.org/v2/top-headlines?country=us&apiKey={api_key}")
-        if r.status_code == 200:
-            data = r.json()
-            articles = data.get('articles', [])
-            for article in articles:
-                speak(article['title'])
-    elif "validate" in c.lower():
-        text_to_validate = c.split("validate", 1)[1].strip()
-        validated_text = validate_medical_terms(text_to_validate)
-        speak(f"Validated text: {validated_text}")
+# Validate medical terms using BioBERT
+def validate_medical_terms(text):
+    words = text.split()
+    validated_words = []
+    for word in words:
+        # Predict using BioBERT to validate terms
+        masked_sentence = f"{word} is a [MASK] term."
+        prediction = bio_bert(masked_sentence)
+        # If 'medical' appears as a high-confidence prediction, retain the word
+        if any("medical" in p["token_str"] for p in prediction):
+            validated_words.append(word)
+        else:
+            validated_words.append(word)  # Keep the word even if not recognized
+    return " ".join(validated_words)
+
+# Main function to process commands
+def process_command(command, src_lang="en", dest_lang="es"):
+    print(f"Recognized command: {command}")
+    
+    if "translate" in command.lower():
+        # Extract text to translate
+        text_to_translate = command.split("translate")[1].strip()
+        translated_text = translate_text(text_to_translate, src_lang, dest_lang)
+        
+        # Validate medical terms in the translated text
+        validated_text = validate_medical_terms(translated_text)
+        print(f"Validated Translation: {validated_text}")
+        speak(f"Translation: {validated_text}")
     else:
-        output = ai_process(c)
+        # Use OpenAI to process the command
+        output = openai_process(command)
         speak(output)
 
-# Main program
+# Main loop
 if __name__ == "__main__":
-    speak("Initializing Jarvis....")
-    recognizer = sr.Recognizer()
-
+    speak("Initializing real-time medical translator...")
+    
     while True:
         try:
             with sr.Microphone() as source:
-                print("Listening for wake word 'Jarvis'...")
-                audio = recognizer.listen(source, timeout=2, phrase_time_limit=2)
-                word = recognizer.recognize_google(audio)
-
-                if word.lower() == "jarvis":
-                    speak("Yes Sir")
-                    print("Listening for command...")
-                    audio = recognizer.listen(source)
-                    command = recognizer.recognize_google(audio)
-                    process_command(command)
-
+                print("Listening for wake word 'Cura'...")
+                audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+                wake_word = recognizer.recognize_google(audio)
+                
+                if wake_word.lower() == "cura":
+                    speak("Yes, how can I assist?")
+                    
+                    # Listen for the actual command
+                    with sr.Microphone() as source:
+                        print("Listening for command...")
+                        audio = recognizer.listen(source)
+                        command = recognizer.recognize_google(audio)
+                        
+                        # Process the command (default: English to Spanish)
+                        process_command(command, src_lang="en", dest_lang="es")
+        
         except sr.UnknownValueError:
-            print("Could not understand audio.")
+            print("Sorry, I could not understand the audio.")
         except sr.RequestError as e:
-            print(f"Speech Recognition error: {e}")
+            print(f"Speech recognition error: {e}")
         except Exception as e:
-            print(f"An error occurred: {e}")
+            print(f"Error: {e}")
